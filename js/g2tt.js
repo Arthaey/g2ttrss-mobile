@@ -13,6 +13,9 @@ if (typeof ($.cookie('g2tt_textType')) !== 'undefined') {
 if (typeof ($.cookie('g2tt_orderBy')) !== 'undefined') {
     pref_OrderBy = $.cookie('g2tt_orderBy');
 }
+if (typeof ($.cookie('g2tt_feedSort')) !== 'undefined') {
+    pref_FeedSort = $.cookie('g2tt_feedSort');
+}
 
 global_backCat = []; // Feed view always starts with all items
 global_ids = []; // List of all article IDs currently displayed
@@ -52,7 +55,7 @@ $(document).ready(function () {
             });
             $('.login').addClass('hidden');
             $('#main').removeClass('hidden');
-            getData();
+            load();
         });
 
         // callback handler that will be called on failure
@@ -74,7 +77,6 @@ $(document).ready(function () {
         event.preventDefault();
     });
 
-    getData();
 
 
     // Show more items
@@ -96,12 +98,13 @@ $(document).ready(function () {
 
     // Refresh button
     $('#header-refresh').unbind('click').click(function () {
-        $(this).toggleClass('m-button-pressed');
-        var data = new Object();
-        data.op = "updateFeed";
-        data.feed_id = pref_Feed;
-        apiCall(data, false);
-        location.reload(true);
+        $(this).addClass('m-button-pressed');
+        if ($('#subscriptions').is(':hidden')) {
+            location.reload(true);
+        }
+        else {
+            refreshCats();
+        }
     });
 
     // View mode menu selection
@@ -111,10 +114,10 @@ $(document).ready(function () {
         $.cookie('g2tt_viewMode', pref_ViewMode);
         $('.showItem').removeClass('g2tt-option-selected');
         $(this).addClass('g2tt-option-selected');
-        $('#entries').empty();
         $('.feedsItem').removeClass('g2tt-option-selected');
-        $('#feeds-' + $(this).attr('id')).addClass('g2tt-option-selected');
-        $('#subscriptions').removeClass().addClass('show-' + $(this).attr('id'));
+        $('#feeds-' + pref_ViewMode).addClass('g2tt-option-selected');
+        $('#entries').empty();
+        $('#subscriptions').attr('class', 'hidden show-' + pref_ViewMode);
         getHeadlines();
     });
 
@@ -131,11 +134,8 @@ $(document).ready(function () {
 
     // Back to Feeds
     $('.back-to-feeds').unbind('click').click(function () {
-        $('#feed').addClass('hidden');
-        $('#subscriptions').removeClass('hidden');
-        $('.back-to-feeds').addClass('hidden');
-        $('.g2tt-menu').children().not('#seperator4, #menu-logout').toggle('hidden');
-        getTopCategories();
+        refreshCats();
+        showFeeds();
     });
 
     // View mode feeds menu selection
@@ -146,7 +146,23 @@ $(document).ready(function () {
         $.cookie('g2tt_viewMode', pref_ViewMode);
         $('.feedsItem').removeClass('g2tt-option-selected');
         $(this).addClass('g2tt-option-selected');
-        $('#subscriptions').removeClass().addClass('show-' + $(this).attr('id').substring(6));
+        $('.showItem').removeClass('g2tt-option-selected');
+        $('#' + pref_ViewMode).addClass('g2tt-option-selected');
+        $('#subscriptions').attr('class', 'show-' + $(this).attr('id').substring(6));
+    });
+
+    // Sort feeds A-Z
+    if(pref_FeedSort == '1') {
+        $('.feedsSort').addClass('g2tt-option-selected');
+    }
+    $('.feedsSort').unbind('click').click(function () {
+        if(pref_FeedSort == '1') {
+            pref_FeedSort = '0';
+        } else {
+            pref_FeedSort = '1';
+        }
+        $.cookie('g2tt_feedSort', pref_FeedSort);
+        $(this).toggle('g2tt-option-selected');
     });
 
     // Back to Feeds from sub category
@@ -158,6 +174,8 @@ $(document).ready(function () {
     $('#mark-these-read, #menu-mark-read').unbind('click').click(function () {
         $('body').removeClass('loaded').addClass('loading');
         $('.load-more-message').html('Marking as read...');
+        //remove those that need to be kept unread
+        keepUnread.removeFromArray(global_ids);
         var data = new Object();
         data.op = "updateArticle";
         data.article_ids = global_ids.join(',');
@@ -191,7 +209,62 @@ $(document).ready(function () {
     // Search
     $('#menu-search').unbind('click').click(function () {});
 
+    load();
 });
+
+function refreshCats() {
+    var data = new Object();
+    data.op = "getCounters";
+    data.output_mode = "fc";
+    var request = apiCall(data);
+
+    request.done(function (response) {
+        var counters = response['content'];
+        var cats = [];
+        var feeds = [];
+        for (var i = 0; i < counters.length; i++) {
+            if (counters[i]['kind'] == 'cat') {
+                cats[counters[i]['id']] = (counters[i]);
+            } else {
+                feeds[counters[i]['id']] = (counters[i]);
+            }
+        }
+        $('.sub-row').each(function (i,j) {
+            var id = $(this).attr('id').substring(10);
+            var is_cat = ($(this).hasClass('open-sub-folder') || $(this).hasClass('closed-sub-folder'));
+
+            if (id == "-4" || id == "-1") {
+                $(this).find('.item-count-value').html(feeds['global-unread']['counter']);
+            } else if (is_cat) {
+                $(this).find('.item-count-value').html(cats[id]['counter']);
+            } else {
+                $(this).find('.item-count-value').html(feeds[id]['counter']);
+            }
+        });
+        $('#header-refresh').removeClass('m-button-pressed');
+    });
+}
+
+function showFeeds() {
+    $('#feed').addClass('hidden');
+    $('#subscriptions').removeClass('hidden');
+    $('.back-to-feeds').addClass('hidden');
+    $('.articlesMenu').addClass('hidden');
+    $('.feedsMenu').removeClass('hidden');
+    if ($('#nav-title').html() != 'All articles') {
+        $('#sub-list-back').removeClass('hidden');
+    }
+    $('#nav-title').html('');
+}
+
+function showArticles() {
+    $('#feed').removeClass('hidden');
+    $('#subscriptions').addClass('hidden');
+    $('.back-to-feeds').removeClass('hidden');
+    $('.articlesMenu').removeClass('hidden');
+    $('.feedsMenu').addClass('hidden');
+    $('#sub-list-back').addClass('hidden');
+}
 
 function apiCall(data, asynch) {
     if (typeof (asynch) === 'undefined') asynch = true;
@@ -240,18 +313,10 @@ function getHeadlines(since) {
         }
         headlines = response['content'];
 
-        // API isn't returning them in the requested sort order, so sort manually.
-// This sorting makes the article IDs out of oder which breaks some logic around getting
-//the next articles, commenting out for now
-//        var order_by = (pref_OrderBy == "date_reverse" ? 1 : -1);
-//        headlines.sort(function (a, b) {
-//          return order_by * ((a.updated < b.updated) ? -1 : ((a.updated > b.updated) ? 1 : 0));
-//        });
-
         if (headlines.length != data.limit) {
-            $('#show-more-row').hide();
+            $('.load-more-message').hide();
         } else {
-            $('#show-more-row').show();
+            $('.load-more-message').show();
         }
         $.each(headlines, function (index, headline) {
             global_ids.push(headline.id);
@@ -349,12 +414,16 @@ function getHeadlines(since) {
 
             if ($(this).hasClass('read-state-unread')) {
                 for (var i = 0; i < global_ids.length; i++) {
-                    if (global_ids[i] == $(this).closest('.entry-row').attr('id')) {
+                    var articleId = $(this).closest('.entry-row').attr('id');
+                    if (global_ids[i] == articleId) {
                         global_ids.splice(i,1);
+                        keepUnread.addId(articleId);
                     }
                 }
             } else {
-                global_ids.push($(this).closest('.entry-row').attr('id'));
+                var articleId = $(this).closest('.entry-row').attr('id');
+                global_ids.push(articleId);
+                keepUnread.removeId(articleId);
             }
 
             var data = new Object();
@@ -380,10 +449,12 @@ function getHeadlines(since) {
         $('body').removeClass('loading').addClass('loaded');
         $('.load-more-message').html('Load more items...');
         $('.entries-count').html('Showing ' + $('.entry-row').length + ' items');
+        keepUnread.clean(global_ids);
     });
 }
 
 function getTopCategories() {
+    $('#nav-title').html('');
     $('#sub-list-back').addClass('hidden');
     if ($('#sub--4').length != 0) {
         $('#subscriptions-list').children().addClass('hidden');
@@ -409,7 +480,7 @@ function getTopCategories() {
         <div class='icon-cell'> \
         <div class='icon'></div> \
         </div> \
-        <div class='text sub-item'>All items</div> \
+        <div class='text sub-item'>All articles</div> \
         <div class='item-count larger whisper'> \
         <span class='item-count-value' id='tree-item--4-unread-count'>" + unread + "</span> \
         </div> \
@@ -417,10 +488,12 @@ function getTopCategories() {
 
             $('#sub--4').prepend(entry);
 
-            $('.open-sub-folder').unbind('click').click(function () {
+            $('#tree-item--4').unbind('click').click(function () {
                 $.cookie('g2tt_feed', $(this).attr('id').substring(10));
                 $.cookie('g2tt_isCat', false);
-                location.reload(true);
+                pref_Feed = $.cookie('g2tt_feed');
+                pref_IsCat = $.cookie('g2tt_isCat');
+                getData();
             });
         });
 
@@ -435,7 +508,11 @@ function getTopCategories() {
             cats.sort(function (a, b) {
                 var db_order = ((a.order_id < b.order_id) ? -1 : ((a.order_id > b.order_id) ? 1 : 0));
                 var alpha_order = ((a.title < b.title) ? -1 : ((a.title > b.title) ? 1 : 0));
-                return (db_order || alpha_order);
+                if (pref_FeedSort == '1') {
+                    return alpha_order;
+                } else {
+                    return db_order;
+                }
             });
             $.each(cats, function (index, cat) {
                 var entry = "<div class='row whisper sub-row closed-sub-folder" + ((cat.unread > 0) ? " unread-sub" : " no-unread-sub-row") + " nested-sub' id='tree-item-" + cat.id + "'> \
@@ -470,6 +547,7 @@ function getFeeds(parent_id, parent_title, parent_unread) {
         getTopCategories();
         return;
     }
+    $('#nav-title').html('');
     $('#sub-list-back').removeClass('hidden');
     if ($('#sub-' + parent_id).length != 0) {
         $('#subscriptions-list').children().addClass('hidden');
@@ -492,7 +570,12 @@ function getFeeds(parent_id, parent_title, parent_unread) {
         feeds.done(function (response, textStatus, jqXHR) {
             feeds = response['content'];
             feeds.sort(function (a, b) {
-                return ((a.cat_id < b.cat_id) ? -1 : ((a.cat_id > b.cat_id) ? 1 : 0));
+                var alpha_order = ((a.title < b.title) ? -1 : ((a.title > b.title) ? 1 : 0));
+                if (pref_FeedSort == '1') {
+                    return alpha_order;
+                } else {
+                    return ((a.cat_id < b.cat_id) ? -1 : ((a.cat_id > b.cat_id) ? 1 : 0));
+                }
             });
             $('#subscriptions-list').append("<div id='sub-" + parent_id + "'></div>");
 
@@ -529,16 +612,20 @@ function getFeeds(parent_id, parent_title, parent_unread) {
                 getFeeds($(this).attr('id').substring(10), $(this).find('.sub-item').html(), $(this).find('.item-count-value').html());
             });
 
-            $('.open-sub-folder').unbind('click').click(function () {
+            $('.open-sub-folder[id!="tree-item--4"]').unbind('click').click(function () {
                 $.cookie('g2tt_feed', $(this).attr('id').substring(10));
                 $.cookie('g2tt_isCat', true);
-                location.reload(true);
+                pref_Feed = $.cookie('g2tt_feed');
+                pref_IsCat = $.cookie('g2tt_isCat');
+                getData();
             });
 
             $('.sub').unbind('click').click(function () {
                 $.cookie('g2tt_feed', $(this).attr('id').substring(10));
                 $.cookie('g2tt_isCat', false);
-                location.reload(true);
+                pref_Feed = $.cookie('g2tt_feed');
+                pref_IsCat = $.cookie('g2tt_isCat');
+                getData();
             });
 
             // Done loading
@@ -548,12 +635,124 @@ function getFeeds(parent_id, parent_title, parent_unread) {
     }
 }
 
+function getTitle() {
+    var data = new Object();
+    if (pref_IsCat == "true") {
+        data.op = "getCategories";
+    } else {
+        data.op = "getFeeds";
+        data.cat_id = "-4";
+    }
+       
+    var request = apiCall(data);
+        
+    request.done(function (response, textStatus, jqXHR) {
+        if (response['status'] != 0) {
+            $.removeCookie('g2tt_sid');
+            getData();
+            return;
+        }
+        items = response['content'];
 
-function getData() {
-    if (typeof ($.cookie('g2tt_sid')) === 'undefined') {
+        $.each(items, function (index, item) {
+            if (item.id == pref_Feed) {
+                $('#nav-title').html(item.title);
+                return;
+            }
+        });
+    });
+}
+
+function load() {
+   if (typeof ($.cookie('g2tt_sid')) === 'undefined') {
         $('#main').addClass('hidden');
         $('.login').removeClass('hidden');
+    } else if (pref_StartInCat == '1') {
+        showFeeds();
+        getTopCategories();
     } else {
+        getTitle();
         getHeadlines();
+        getTopCategories();
     }
+} 
+
+function getData() {
+    showArticles();
+    $('body').removeClass('loaded').addClass('loading');
+    $('.load-more-message').html('Marking as read...');
+    $('#entries').empty();
+    getTitle();
+    getHeadlines();
+}
+
+var keepUnread = new function() {
+    var COOKIE_NAME = 'g2tt_keepUnread_ids';
+    this.keepUnreadIdMap = undefined;
+
+    this.hasId = function (ids, articleId) {
+        return true == getIdMap[articleId];
+    };
+    this.removeId = function (articleId) {
+        delete getIdMap()[articleId];
+    };
+    this.addId = function (articleId) {
+        getIdMap()[articleId] = true;
+        this.save();
+    };
+    this.clean = function (ids) {
+        //check that global_keepUnread_ids does not contain items which are no longer in global_ids
+        var keepUnreadIds = getIdMap();
+        if (ids.length > 0) {
+            for (var id in keepUnreadIds) {
+                id = id|0;//id must be numeric
+                if ($.inArray(id, ids) < 0) {
+                    this.removeId(id);
+                }
+            }
+        }
+        this.save();
+    };
+
+    var getIdMap = function () {
+        if (undefined == this.keepUnreadIdMap) {
+            //attempt to load from cookie
+            this.keepUnreadIdMap = [];
+            var savedKeepUnread_ids;
+            if (typeof ($.cookie(COOKIE_NAME)) !== 'undefined') {
+                savedKeepUnread_ids = $.cookie(COOKIE_NAME); 
+            }
+            
+            if (savedKeepUnread_ids && savedKeepUnread_ids.length > 0) {
+                var idList = savedKeepUnread_ids.split(',');
+                for (var i=0; i < idList.length; i++) {
+                    this.keepUnreadIdMap[idList[i]] = true;
+                }
+            }
+        }
+        return this.keepUnreadIdMap;
+    };
+
+    /*given array of ids, remove all that need to be kept unread*/
+    this.removeFromArray = function (ids) {
+        var keepUnreadIds = getIdMap();
+        for (var id in keepUnreadIds) {
+            id = id|0;//id must be numeric
+            var index = $.inArray(id, ids);
+            if ( index >= 0) {
+                ids.splice(index, 1);
+            }
+        }
+    };
+    this.save = function () {
+        var strVal = '';
+        var keepIdMap = getIdMap();
+        for (articleId in keepIdMap) {
+            if (strVal.length > 0) {
+                strVal += ',';
+            }
+            strVal += articleId;
+        }
+        $.cookie(COOKIE_NAME, strVal);
+    };
 }
